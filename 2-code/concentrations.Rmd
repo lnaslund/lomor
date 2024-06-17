@@ -1,0 +1,278 @@
+---
+title: "concentration"
+author: "L. Naslund"
+date: "2023-11-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf)
+library(tidyverse)
+library(mapview)
+library(lwgeom)
+library(EGRET)
+```
+
+```{r create reach buffer}
+lomor <- read_sf("1-data/1-geospatial/lower_missouri_river.shp") %>% st_transform(crs = 26915) %>% st_zm() 
+reach_pts <- read_sf("1-data/1-geospatial/reach_endpoints.shp") %>% st_transform(crs = 26915) %>% st_zm()
+
+reach_snap <- st_snap(reach_pts, lomor, tolerance = 250)
+
+omaha <- reach_snap %>% filter(site_numbe == "6610000")
+stjoseph <- reach_snap %>% filter(site_numbe == "6818000")
+
+split_line_temp <- st_split(lomor, omaha) %>% st_collection_extract("LINESTRING")
+
+lomor_reach <- st_split(split_line_temp %>% slice(1), stjoseph) %>% st_collection_extract("LINESTRING") %>% slice(2)
+
+lomor_10km <- st_buffer(lomor_reach, 10000)
+#st_write(lomor_10km, "../3-output/lomor_10km.shp")
+```
+
+```{r get nitrate data}
+lomor_10km <- st_read("../3-output/lomor_10km.shp")
+
+lomor_10km %>% st_transform(crs = 4269) %>% st_bbox() 
+
+# search usgs nwis with this bounding box https://waterdata.usgs.gov/nwis/inventory?search_criteria=lat_long_bounding_box&submitted_form=introduction
+
+mapview(st_bbox(lomor_10km))+
+  mapview(lomor_10km)
+
+gages <- read.table("../1-data/1-geospatial/gages_10km_bbox.txt", sep = "\t")
+names(gages) <- gages %>% slice(1)
+gages <- gages %>% slice(-c(1:2)) %>% filter(site_tp_cd %in% c("ST", "ST-DCH"))
+
+gages_nad27 <- gages %>% filter(coord_datum_cd == "NAD27") %>% st_as_sf(coords = c("dec_long_va", "dec_lat_va"))
+st_crs(gages_nad27) <- 4267
+gages_nad83 <- gages %>% filter(coord_datum_cd == "NAD83") %>% st_as_sf(coords = c("dec_long_va", "dec_lat_va"))
+st_crs(gages_nad83) <- 4269
+
+
+gages_sf <- gages_nad27 %>% st_transform(crs = 26915) %>% bind_rows(gages_nad83 %>% st_transform(crs = 26915))
+
+gages_10km_buffer <- gages_sf[st_intersects(gages_sf, lomor_10km) %>% lengths > 0, ]
+
+mapview(gages_10km_buffer)
+
+startDate <- ""
+endDate <- ""
+parameter_cd<-"00631" #nitrate plus nitrite, water, filtered, mg/L as nitrogen
+
+site_vec <- gages_10km_buffer$site_no
+data_vec <- c()
+
+for(i in 1:length(site_vec)){
+  ret <- tryCatch(
+  expr = {
+    siteNumber <- site_vec[i]
+    result <- readNWISSample(siteNumber, parameter_cd, startDate, endDate)
+    siteNumber
+  },
+  error = function(e) {
+    if (grepl("undefined columns selected", e$message)) {
+      NULL
+    } else {
+      stop(e)
+    }
+  }
+)
+  print(ret)
+  if(is.null(ret) == FALSE){
+    data_vec <- c(data_vec, ret)
+  }
+}
+
+min_date <- c()
+max_date <- c()
+n_obs <- c()
+nitrate_data <- NULL
+nitrate_sample <- list()
+
+
+for(i in 1:length(data_vec)){
+  siteNumber <- data_vec[i]
+  result <- readNWISSample(siteNumber, parameter_cd, startDate, endDate)
+  
+  
+  nitrate_sample[[i]] <-assign(paste("sample", siteNumber, parameter_cd, sep = "_"), result)
+   min_date <- c(min_date, min(as.character(result$Date)))
+   max_date <- c(max_date, max(as.character(result$Date)))
+   n_obs <- c(n_obs, nrow(result))
+
+   result$site <- siteNumber
+   nitrate_data <- nitrate_data %>% bind_rows(result)
+}
+# nitrate_data has every nitrate value not just those with hydrology too for mean annual 
+
+ggplot(nitrate_data, aes(ConcAve)) + geom_histogram()
+```
+
+```{r get discharge of nearest flowline to each borrow pit}
+borrow <- read_sf("../1-data/1-geospatial/usace_delin_borrow.shp") %>% select(-Shape_Leng, -Shape_Area, -ORIG_FID)
+
+eromma_1024 <- st_read(dsn = "../1-data/1-geospatial/NHDPLUS_H_1024_HU4_GDB.gdb", layer = "NHDPlusEROMMA") 
+
+flowlines_1024 <- st_read(dsn = "../1-data/1-geospatial/NHDPLUS_H_1024_HU4_GDB.gdb", layer = "NHDFlowline") %>% left_join(eromma_1024, by = "NHDPlusID") %>% st_transform(crs = st_crs(borrow))
+
+eromma_1023 <- st_read(dsn = "../1-data/1-geospatial/NHDPLUS_H_1023_HU4_GDB.gdb", layer = "NHDPlusEROMMA") 
+
+flowlines_1023 <- st_read(dsn = "../1-data/1-geospatial/NHDPLUS_H_1023_HU4_GDB.gdb", layer = "NHDFlowline_1023") %>% left_join(eromma_1023, by = "NHDPlusID") %>% st_transform(crs = st_crs(borrow))
+
+flowlines <- flowlines_1024 %>% bind_rows(flowlines_1023) %>% st_zm()
+
+# added discharge limit to make sure rivers are not routed to borrow pits
+tribs <- flowlines %>% mutate(reach_nm = if_else(is.na(GNIS_Name), "", GNIS_Name)) %>% filter(reach_nm != "Missouri River") %>% filter(QAMA < 10)
+
+nearest_flowlines <- st_nearest_feature(borrow, tribs)
+
+borrow$nearest <- nearest_flowlines
+borrow$nearest_ID <- tribs %>% slice(nearest_flowlines) %>% pull(NHDPlusID)
+
+# QAMA is originally in ft3/s convert to m3/d
+# multiply by m3 in ft3 and s in d
+borrow$nearest_QAMA <- tribs %>% slice(nearest_flowlines) %>% pull(QAMA) * 0.0283168 * 86400
+
+borrow$area <- st_area(borrow) 
+
+# going to have to figure out how to make sure it selects from the correct side of the river. May create a mask and do it one side at a time or hand edit. Also going to have to filter so that you aren't sending the Nishnabotna river through a tiny borrow pit
+mapview(tribs %>% slice(nearest_flowlines))+mapview(borrow)
+```
+
+```{r example with one borrow pit}
+source("k_function.R")
+test <- borrow %>% slice(1)
+
+# proportion removed 
+depth <- runif(n = 1, min = 0, max = 1)
+volume <- as.numeric(test$area) * depth
+hrt <- volume/test$nearest_QAMA
+prop_remov <- estimate_R(hrt) * 0.01
+
+# load in kg / yr
+conc <- sample(nitrate_data$ConcAve, size = 1)
+load <- conc * test$nearest_QAMA * 1000 *365 * 1e-6
+
+# removed (kg/yr)
+prop_remov * load
+```
+
+```{r adding in prediction interval}
+fixed_effects <- lm(log(k_no3)~log(hrt),data=cheng_model_data_clean)
+
+
+# probably better to sample from the
+estimate_no3_pred <- function(res_time){
+  new.dat <- data.frame(hrt = 300)
+  
+  k_mean_log = predict(fixed_effects, new.dat, interval = "prediction")[1]
+  k_sd_log = (predict(fixed_effects, new.dat, interval = "prediction")[3] - predict(fixed_effects, new.dat, interval = "prediction")[1])/2
+  
+  k = exp(rnorm(1, k_mean_log, k_sd_log))
+  
+  R=100-100*exp(-k*res_time)
+  return(R)
+}
+
+n <- 10000
+
+removal_vec <- c()
+for(i in 1:n){
+  depth <- runif(n = nrow(borrow), min = 0, max = 1)
+  volume <- as.numeric(borrow$area) * depth
+  hrt <- volume/borrow$nearest_QAMA
+  
+  prop_remov <- map_dbl(hrt, estimate_no3_pred) * 0.01
+  
+  conc <- sample(nitrate_data$ConcAve, size = nrow(borrow))
+  load <- conc * borrow$nearest_QAMA * 1000 *365 * 1e-6
+  
+  remov <- load * prop_remov
+  
+  tot_remov <- sum(remov)
+  
+  removal_vec <- c(removal_vec, tot_remov)
+}
+
+removal_vec <- sort(removal_vec)
+
+# total removal in kg per year
+# 2.5%
+removal_vec[250]
+
+# median
+removal_vec[5000]
+
+# 97.5%
+removal_vec[9750]
+
+# as a percentage of added nitrate over reach
+# 2.5%
+(removal_vec[250]/(44.35 * 10^6)) * 100
+
+# median
+(removal_vec[5000]/(44.35 * 10^6)) * 100
+
+# 97.5
+(removal_vec[9750]/(44.35 * 10^6)) * 100
+
+```
+
+
+```{r Monte Carlo removal}
+n <- 10000
+
+removal_vec <- c()
+for(i in 1:n){
+  depth <- runif(n = nrow(borrow), min = 0, max = 1)
+  volume <- as.numeric(borrow$area) * depth
+  hrt <- volume/borrow$nearest_QAMA
+  
+  prop_remov <- map_dbl(hrt, estimate_R) * 0.01
+  
+  conc <- sample(nitrate_data$ConcAve, size = nrow(borrow))
+  load <- conc * borrow$nearest_QAMA * 1000 *365 * 1e-6
+  
+  remov <- load * prop_remov
+  
+  tot_remov <- sum(remov)
+  
+  removal_vec <- c(removal_vec, tot_remov)
+}
+
+removal_vec <- sort(removal_vec)
+
+# total removal in kg per year
+# 2.5%
+removal_vec[250]
+
+# median
+removal_vec[5000]
+
+# 97.5%
+removal_vec[9750]
+
+# as a percentage of added nitrate over reach
+# 2.5%
+(removal_vec[250]/(44.35 * 10^6)) * 100
+
+# median
+(removal_vec[5000]/(44.35 * 10^6)) * 100
+
+# 97.5
+(removal_vec[9750]/(44.35 * 10^6)) * 100
+```
+
+```{r}
+# TODO calculate
+# Nodaay 06817000
+```
+
+
+```{r}
+# maybe we want to use social cost of N estimates to beef up estimate benefits generated from these projects 
+# this might mean we want to keep track of individual borrow pits, alternatively we could just divide by area to get an average by area
+```
+
