@@ -1,0 +1,186 @@
+---
+title: "1-k-estimation"
+author: "L. Naslund"
+date: "2024-06-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(caret)
+library(lme4)
+library(MuMIn)
+
+set.seed(207)
+```
+
+# TN k model
+```{r load TN data}
+# Load k data from Cheng & Basu 2017 and Shen et al. 2023. Duplicate studies removed by hand
+k_data<-read.csv("../1-data/2-k-estimation/k_TN_meta_analysis_data.csv") %>% 
+  
+  # remove below observations b/c yield unrealistic N concentrations*
+  filter(references != "Sanchez-Carrillo and Alvarez-Cobelas 2000") %>%  
+  
+  mutate(
+    # replace delimiter for missing flow with NA
+    cheng_flow_m3_year_refact = if_else(cheng_flow_m3_year < 0, NA, cheng_flow_m3_year),
+    # convert flow to liters per day
+    cheng_flow_l_day = cheng_flow_m3_year_refact * 1e3 * (1/365), 
+    # calculate N concentrations from flow and load 
+    N_conc_mg_l = (cheng_N_load_kg_d * 1e6)/cheng_flow_l_day) %>% 
+  
+  # Negative or 0 k values (<2% of observations) will be lost during a log transform, so removed here. Both meta-analyses removed them from the dataset. 
+  filter(k_d > 0) 
+
+# Check that N concentrations are reasonable. Judge that it is considering includes wetlands which treat landfill leachate which can reach > 1000 mg/L TN
+range(k_data$N_conc_mg_l, na.rm = T)
+
+# Subset Cheng data
+cheng_data <- k_data %>% filter(meta_analysis == "cheng") # uses the PFR model of k rather than CSTR
+
+# *Suspect a transcription error in the original database. Surface area was listed as 1.7e10 m2 instead of 1.7e7 m2. Reported area in paper 17 km2.
+```
+
+```{r plot k vs hrt}
+kd_vs_hrt<-ggplot(k_data,aes(x=hrt_d,y=k_d))+
+  geom_point()+
+  geom_smooth(method='lm')+
+  scale_x_log10()+
+  scale_y_log10()+
+  theme_classic()+theme(text=element_text(size=20))+
+  xlab(expression('Hydraulic Residence Time (d'^-1*')'))+
+  ylab(expression('Rate Constant, k (d'^-1*')'))
+
+png(filename="../3-output/raw_k_plot.png",units='in', width=8,height=5,res=300)
+kd_vs_hrt
+dev.off()
+```
+
+```{r tn k model selection}
+# Selecting the best model to describe K. 
+# comparing models with hrt only to those with N load or concentration, accounting for potential loss in N removal efficiency with higher concentrations/loads
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+# Using simple linear models for model selection - there is likely some variation explained at the source study level due to different methods used.
+# But both Shen and Cheng did not include this in their modeling. 
+# Will refit the best model with a random effect for reference to try to get the best parameter estimates
+tn_model_1 <- caret::train(log(k_d)~log(hrt_d), data = cheng_data, 
+                      trControl = train_control, 
+                      method = "lm")
+
+# Adding in N loading to the dataset, accounting for potential efficiency loss
+cheng_data_2<- k_data %>% select(k_d,hrt_d,meta_analysis,cheng_N_load_kg_d) %>% 
+  filter(cheng_N_load_kg_d>0)
+
+tn_model_2 <- caret::train(log(k_d)~log(hrt_d)+log(cheng_N_load_kg_d), data = cheng_data_2, 
+                      trControl = train_control, 
+                      method = "lm")
+
+# Adding in N concentration
+cheng_data_3<- k_data %>% select(k_d,hrt_d,meta_analysis,N_conc_mg_l) %>% 
+  filter(N_conc_mg_l>0)
+
+tn_model_3 <- caret::train(log(k_d)~log(hrt_d)+log(N_conc_mg_l), data = cheng_data_3, 
+                              trControl = train_control, 
+                              method = "lm")
+
+# Full modeling data
+full_model <- caret::train(log(k_d)~log(hrt_d), data = k_data, 
+                              trControl = train_control, 
+                              method = "lm")
+
+# Model selection table
+# Model with all of the data and only HRT as a predictor is the best based on RMSE
+t<-bind_rows(tn_model_1$results,tn_model_2$results,tn_model_3$results,full_model$results)
+t$n=c(nrow(cheng_data),nrow(cheng_data_2),nrow(cheng_data_3),nrow(k_data))
+t$model=c('cheng_hrt','cheng_hrt_load','cheng_hrt_conc',"all_hrt")
+
+write.csv(t,"../3-output/summary_tn_model_selection.csv")
+```
+
+```{r random effects model}
+# Refitting best model with random effect of study reference. Given minimal difference in parameter estimate, going forward with fixed effects model
+
+mixed_model<-lmer(log(k_d)~log(hrt_d)+(1|references),data=k_data)
+summary(mixed_model)
+r.squaredGLMM(mixed_model)
+
+fixed_effects_model <- lm(log(k_d)~log(hrt_d),data=k_data)
+summary(fixed_effects_model)
+```
+
+# Nitrate k model
+```{r load no3 data}
+# Cheng & Basu includes nitrate k but Shen only has TN and TP
+cheng_no3 <- read_csv("../1-data/2-k-estimation/Cheng_WRR_2017_data.csv") %>% 
+  select(Index:k_PO4_CSTR) %>% 
+  filter(is.na(k_NO3_PFR) == FALSE) %>% 
+  mutate(hrt_d = as.numeric(`Hydraulic Residence Time (tau)`), k_d = as.numeric( k_NO3_PFR)) %>% 
+  select(`Reference Paper`, Flow, L_in_NO3, hrt_d, k_d) %>% 
+  rename("no3_load_kg_d" = "L_in_NO3") %>% 
+  fill(`Reference Paper`) %>% 
+  mutate(
+    # replace delimiter for missing flow with NA
+    flow_m3_year_refact = if_else(Flow <= 0, NA, Flow),
+    # convert flow to liters per day
+    flow_l_day = flow_m3_year_refact * 1e3 * (1/365), 
+    # calculate N concentrations from flow and load 
+    no3_conc_mg_l = (no3_load_kg_d * 1e6)/flow_l_day) %>% 
+  
+  # remove negative k 
+  filter(k_d > 0) 
+
+range(cheng_no3$no3_conc_mg_l, na.rm = T)
+```
+
+```{r no3 k model selection}
+# Selecting the best model to describe K. 
+# comparing models with hrt only to those with N load or concentration, accounting for potential loss in N removal efficiency with higher concentrations/loads
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+# Using simple linear models for model selection - there is likely some variation explained at the source study level due to different methods used.
+# But both Shen and Cheng did not include this in their modeling. 
+# Will refit the best model with a random effect for reference to try to get the best parameter estimates
+no3_model_1 <- caret::train(log(k_d)~log(hrt_d), data = cheng_no3, 
+                      trControl = train_control, 
+                      method = "lm")
+
+# Adding in N loading to the dataset, accounting for potential efficiency loss
+no3_data_2<- cheng_no3 %>% select(k_d,hrt_d,no3_load_kg_d) %>% 
+  filter(no3_load_kg_d>0)
+
+no3_model_2 <- caret::train(log(k_d)~log(hrt_d)+log(no3_load_kg_d), data = no3_data_2, 
+                      trControl = train_control, 
+                      method = "lm")
+
+# Adding in N concentration
+no3_data_3<- cheng_no3 %>% select(k_d,hrt_d,no3_conc_mg_l) %>% 
+  filter(no3_conc_mg_l>0)
+
+no3_model_3 <- caret::train(log(k_d)~log(hrt_d)+log(no3_conc_mg_l), data = no3_data_3, 
+                              trControl = train_control, 
+                              method = "lm")
+
+# Model selection table
+# Model with only HRT as a predictor is the best based on RMSE
+t<-bind_rows(no3_model_1$results,no3_model_2$results,no3_model_3$results)
+t$n=c(nrow(cheng_no3),nrow(no3_data_2),nrow(no3_data_3))
+t$model=c('cheng_hrt','cheng_hrt_load','cheng_hrt_conc')
+
+write.csv(t,"../3-output/summary_no3_model_selection.csv")
+```
+
+```{r random effects model}
+# Refitting best model with random effect of study reference. Slightly more effect of random effects on fixed parameter fit for no3 model
+no3_mixed_model<-lmer(log(k_d)~log(hrt_d)+(1|`Reference Paper`),data=cheng_no3)
+summary(no3_mixed_model)
+r.squaredGLMM(no3_mixed_model)
+
+tn_fixed_effects_model <- lm(log(k_d)~log(hrt_d),data=cheng_no3)
+summary(tn_fixed_effects_model)
+
+hist(cheng_no3$no3_conc_mg_l)
+```

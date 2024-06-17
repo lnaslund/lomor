@@ -8,7 +8,7 @@ library(MuMIn)
 d<-read.csv("1-data/2-k-estimation/k_TN_meta_analysis_data.csv")
 
 d$l_day<-d$cheng_flow_m3_year/1000/365 # converting flow to liters per day
-d$N_conc_mg_l<-(d$cheng_N_load_kg_d/(10**6))/d$l_day
+d$N_conc_mg_l<-(d$cheng_N_load_kg_d/(10**6))/d$l_day ##LCN: I think this math is wrong
 
 kd_vs_hrt<-ggplot(d,aes(x=hrt_d,y=k_d))+geom_point()+scale_x_log10()+scale_y_log10()+
   geom_smooth(method='lm',se=FALSE)+theme_classic()+theme(text=element_text(size=20))+
@@ -28,7 +28,7 @@ set.seed(207)
 
 #
 cheng_modeling_data<- d %>% select(k_d,hrt_d,meta_analysis,cheng_N_load_kg_d,N_conc_mg_l) %>% 
-  filter(k_d>0 & hrt_d>0 & meta_analysis=='cheng')
+  filter(k_d>0 & hrt_d>0 & meta_analysis=='cheng') 
 #
 
 ######### Selecting the best model to describe K. comparing models where K is only a function of HRT

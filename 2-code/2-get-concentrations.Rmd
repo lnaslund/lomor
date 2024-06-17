@@ -1,0 +1,173 @@
+---
+title: "2-get-concentrations"
+author: "L. Naslund"
+date: "2024-06-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf)
+library(tidyverse)
+library(mapview)
+library(lwgeom)
+library(EGRET)
+```
+
+```{r create reach buffer}
+# create a 10km reach around the reach to search for concentration data
+lomor <- read_sf("../1-data/1-geospatial/lower_missouri_river.shp") %>% st_transform(crs = 26915) %>% st_zm() 
+reach_pts <- read_sf("../1-data/1-geospatial/reach_endpoints.shp") %>% st_transform(crs = 26915) %>% st_zm()
+
+reach_snap <- st_snap(reach_pts, lomor, tolerance = 250)
+
+omaha <- reach_snap %>% filter(site_numbe == "6610000")
+stjoseph <- reach_snap %>% filter(site_numbe == "6818000")
+
+split_line_temp <- st_split(lomor, omaha) %>% st_collection_extract("LINESTRING")
+
+lomor_reach <- st_split(split_line_temp %>% slice(1), stjoseph) %>% st_collection_extract("LINESTRING") %>% slice(2)
+
+lomor_10km <- st_buffer(lomor_reach, 10000)
+
+#st_write(lomor_10km, "../3-output/lomor_10km.shp")
+```
+
+```{r get nitrate data, warning=FALSE, message=FALSE}
+lomor_10km <- st_read("../3-output/lomor_10km.shp") %>% st_transform(crs = 4269) %>% st_bbox() 
+
+# get gages in nwis within 10km bounding box
+# searched usgs nwis with this bounding box https://waterdata.usgs.gov/nwis/inventory?search_criteria=lat_long_bounding_box&submitted_form=introduction
+gages <- read.table("../1-data/1-geospatial/gages_10km_bbox.txt", sep = "\t")
+names(gages) <- gages %>% slice(1)
+gages <- gages %>% slice(-c(1:2)) %>% filter(site_tp_cd %in% c("ST", "ST-DCH"))
+
+gages_nad27 <- gages %>% filter(coord_datum_cd == "NAD27") %>% st_as_sf(coords = c("dec_long_va", "dec_lat_va"))
+st_crs(gages_nad27) <- 4267
+gages_nad83 <- gages %>% filter(coord_datum_cd == "NAD83") %>% st_as_sf(coords = c("dec_long_va", "dec_lat_va"))
+st_crs(gages_nad83) <- 4269
+
+
+gages_sf <- gages_nad27 %>% st_transform(crs = 26915) %>% bind_rows(gages_nad83 %>% st_transform(crs = 26915))
+
+gages_10km_buffer <- gages_sf[st_intersects(gages_sf, lomor_10km) %>% lengths > 0, ]
+
+mapview(gages_10km_buffer)
+
+# search NWIS for nitrate measurements at identified gages (will take minutes to run)
+startDate <- ""
+endDate <- ""
+parameter_cd<-"00631" #nitrate plus nitrite, water, filtered, mg/L as nitrogen
+
+site_vec <- gages_10km_buffer$site_no
+data_vec <- c()
+
+for(i in 1:length(site_vec)){
+  ret <- tryCatch(
+  expr = {
+    siteNumber <- site_vec[i]
+    result <- readNWISSample(siteNumber, parameter_cd, startDate, endDate)
+    siteNumber
+  },
+  error = function(e) {
+    if (grepl("undefined columns selected", e$message)) {
+      NULL
+    } else {
+      stop(e)
+    }
+  }
+)
+  print(ret)
+  if(is.null(ret) == FALSE){
+    data_vec <- c(data_vec, ret)
+  }
+}
+
+min_date <- c()
+max_date <- c()
+n_obs <- c()
+nitrate_data <- NULL
+nitrate_sample <- list()
+
+
+for(i in 1:length(data_vec)){
+  siteNumber <- data_vec[i]
+  result <- readNWISSample(siteNumber, parameter_cd, startDate, endDate)
+  
+  
+  nitrate_sample[[i]] <-assign(paste("sample", siteNumber, parameter_cd, sep = "_"), result)
+   min_date <- c(min_date, min(as.character(result$Date)))
+   max_date <- c(max_date, max(as.character(result$Date)))
+   n_obs <- c(n_obs, nrow(result))
+
+   result$site <- siteNumber
+   nitrate_data <- nitrate_data %>% bind_rows(result)
+}
+
+write.csv(nitrate_data, "../3-output/nitrate_data.csv", row.names = FALSE)
+```
+
+```{r get tn data, warning=FALSE, message = FALSE}
+# search NWIS for nitrate measurements at identified gages (will take minutes to run)
+startDate <- ""
+endDate <- ""
+parameter_cd<-"00600" # Total nitrogen [nitrate + nitrite + ammonia + organic-N], water, unfiltered, milligrams per liter
+
+site_vec <- gages_10km_buffer$site_no
+data_vec <- c()
+
+for(i in 1:length(site_vec)){
+  ret <- tryCatch(
+  expr = {
+    siteNumber <- site_vec[i]
+    result <- readNWISSample(siteNumber, parameter_cd, startDate, endDate)
+    siteNumber
+  },
+  error = function(e) {
+    if (grepl("undefined columns selected", e$message)) {
+      NULL
+    } else {
+      stop(e)
+    }
+  }
+)
+  print(ret)
+  if(is.null(ret) == FALSE){
+    data_vec <- c(data_vec, ret)
+  }
+}
+
+min_date <- c()
+max_date <- c()
+n_obs <- c()
+tn_data <- NULL
+tn_sample <- list()
+
+
+for(i in 1:length(data_vec)){
+  siteNumber <- data_vec[i]
+  result <- readNWISSample(siteNumber, parameter_cd, startDate, endDate)
+  
+  
+  tn_sample[[i]] <-assign(paste("sample", siteNumber, parameter_cd, sep = "_"), result)
+   min_date <- c(min_date, min(as.character(result$Date)))
+   max_date <- c(max_date, max(as.character(result$Date)))
+   n_obs <- c(n_obs, nrow(result))
+
+   result$site <- siteNumber
+   tn_data <- tn_data %>% bind_rows(result)
+}
+
+write.csv(tn_data, "../3-output/tn_data.csv", row.names = FALSE)
+```
+
+```{r concentration plots}
+nitrate_data <- read.csv("../3-output/nitrate_data.csv") 
+
+ggplot(nitrate_data, aes(ConcAve)) + geom_histogram() + xlab("NO3-N mg/L")
+
+tn_data <- read.csv("../3-output/tn_data.csv") 
+
+ggplot(tn_data, aes(ConcAve)) + geom_histogram() + xlab("TN mg/L")
+```
+
