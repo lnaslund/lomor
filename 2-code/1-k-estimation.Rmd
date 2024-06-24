@@ -19,7 +19,7 @@ set.seed(207)
 # Load k data from Cheng & Basu 2017 and Shen et al. 2023. Duplicate studies removed by hand
 k_data<-read.csv("../1-data/2-k-estimation/k_TN_meta_analysis_data.csv") %>% 
   
-  # remove below observations b/c yield unrealistic N concentrations*
+  # remove below observations b/c yields unrealistic N concentrations*
   filter(references != "Sanchez-Carrillo and Alvarez-Cobelas 2000") %>%  
   
   mutate(
@@ -97,7 +97,9 @@ t<-bind_rows(tn_model_1$results,tn_model_2$results,tn_model_3$results,full_model
 t$n=c(nrow(cheng_data),nrow(cheng_data_2),nrow(cheng_data_3),nrow(k_data))
 t$model=c('cheng_hrt','cheng_hrt_load','cheng_hrt_conc',"all_hrt")
 
-write.csv(t,"../3-output/summary_tn_model_selection.csv")
+write.csv(t,"../3-output/summary_tn_model_selection.csv", row.names = FALSE)
+
+t
 ```
 
 ```{r random effects model}
@@ -170,7 +172,9 @@ t<-bind_rows(no3_model_1$results,no3_model_2$results,no3_model_3$results)
 t$n=c(nrow(cheng_no3),nrow(no3_data_2),nrow(no3_data_3))
 t$model=c('cheng_hrt','cheng_hrt_load','cheng_hrt_conc')
 
-write.csv(t,"../3-output/summary_no3_model_selection.csv")
+write.csv(t,"../3-output/summary_no3_model_selection.csv", row.names = FALSE)
+
+t
 ```
 
 ```{r random effects model}

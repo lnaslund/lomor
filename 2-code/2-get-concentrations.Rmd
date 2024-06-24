@@ -171,3 +171,172 @@ tn_data <- read.csv("../3-output/tn_data.csv")
 ggplot(tn_data, aes(ConcAve)) + geom_histogram() + xlab("TN mg/L")
 ```
 
+```{r no3 added over reach}
+# Omaha nitrate
+Sample_Omaha <- readNWISSample("06610000", "00631")
+startDate <- min(as.character(Sample_Omaha$Date))
+endDate <- max(as.character(Sample_Omaha$Date))
+Daily_Omaha <- readNWISDaily("06610000", "00060", startDate, endDate)
+INFO_Omaha<- readNWISInfo("06610000","00631")
+INFO_Omaha$shortName <- "Missouri River at Omaha, NE"
+
+eList <- mergeReport(INFO_Omaha, Daily_Omaha, Sample_Omaha)
+
+# data plots
+boxConcMonth(eList)
+boxQTwice(eList)
+plotConcTime(eList)
+plotConcQ(eList)
+multiPlotDataOverview(eList)
+
+eList <- modelEstimation(eList)
+
+# C-Q plots
+plotConcTimeDaily(eList)
+plotFluxTimeDaily(eList)
+plotConcPred(eList)
+plotFluxPred(eList)
+plotResidPred(eList)
+plotResidQ(eList)
+plotResidTime(eList)
+boxResidMonth(eList)
+boxConcThree(eList)
+
+plotConcHist(eList)
+plotFluxHist(eList)
+
+tableResults(eList)
+returnDF_Omaha <- tableResults(eList)
+
+# St Joseph nitrate
+Sample_StJoseph <- readNWISSample("06818000", "00631")
+startDate <- min(as.character(Sample_StJoseph$Date))
+endDate <- max(as.character(Sample_StJoseph$Date))
+Daily_StJoseph <- readNWISDaily("06818000", "00060", startDate, endDate)
+INFO_StJoseph<- readNWISInfo("06818000","00631")
+INFO_StJoseph$shortName <- "Missouri River at St. Joseph, MO"
+
+eList <- mergeReport(INFO_StJoseph, Daily_StJoseph, Sample_StJoseph)
+
+# data plots
+boxConcMonth(eList)
+boxQTwice(eList)
+plotConcTime(eList)
+plotConcQ(eList)
+multiPlotDataOverview(eList)
+
+eList <- modelEstimation(eList)
+
+# C-Q plots
+plotConcTimeDaily(eList)
+plotFluxTimeDaily(eList)
+plotConcPred(eList)
+plotFluxPred(eList)
+plotResidPred(eList)
+plotResidQ(eList)
+plotResidTime(eList)
+boxResidMonth(eList)
+boxConcThree(eList)
+
+plotConcHist(eList)
+plotFluxHist(eList)
+
+tableResults(eList)
+returnDF_StJo <- tableResults(eList)
+
+# Using flow normalized flux but could with this table use a different flux
+no3_fn_summary <- returnDF_Omaha %>% select(Year, "FN Flux [10^6kg/yr]") %>% rename( "Omaha_FN_Flux" = "FN Flux [10^6kg/yr]") %>% full_join(returnDF_StJo %>% select(Year, "FN Flux [10^6kg/yr]") %>% rename( "StJo_FN_Flux" = "FN Flux [10^6kg/yr]"), by = "Year")
+
+# Plot of flux
+no3_fn_summary %>% pivot_longer(cols = c("Omaha_FN_Flux", "StJo_FN_Flux"), names_to = "site", values_to = "flux") %>% ggplot(aes(Year, flux))+geom_line(aes(color = site))
+
+# Average added flux
+no3_added <- no3_fn_summary %>% mutate(added = StJo_FN_Flux - Omaha_FN_Flux) %>% summarize(mean_added = mean(added, na.rm = T)) %>% pull(mean_added)
+no3_added
+```
+
+```{r tn added over reach}
+# Omaha TN
+Sample_Omaha <- readNWISSample("06610000", "00600")
+startDate <- min(as.character(Sample_Omaha$Date))
+endDate <- max(as.character(Sample_Omaha$Date))
+Daily_Omaha <- readNWISDaily("06610000", "00060", startDate, endDate)
+INFO_Omaha<- readNWISInfo("06610000","00600")
+INFO_Omaha$shortName <- "Missouri River at Omaha, NE"
+
+eList <- mergeReport(INFO_Omaha, Daily_Omaha, Sample_Omaha)
+
+# data plots
+boxConcMonth(eList)
+boxQTwice(eList)
+plotConcTime(eList)
+plotConcQ(eList)
+multiPlotDataOverview(eList)
+
+eList <- modelEstimation(eList)
+
+# C-Q plots
+plotConcTimeDaily(eList)
+plotFluxTimeDaily(eList)
+plotConcPred(eList)
+plotFluxPred(eList)
+plotResidPred(eList)
+plotResidQ(eList)
+plotResidTime(eList)
+boxResidMonth(eList)
+boxConcThree(eList)
+
+plotConcHist(eList)
+plotFluxHist(eList)
+
+tableResults(eList)
+returnDF_Omaha <- tableResults(eList)
+
+# St Joseph TN
+Sample_StJoseph <- readNWISSample("06818000", "00600")
+startDate <- min(as.character(Sample_StJoseph$Date))
+endDate <- max(as.character(Sample_StJoseph$Date))
+Daily_StJoseph <- readNWISDaily("06818000", "00060", startDate, endDate)
+INFO_StJoseph<- readNWISInfo("06818000","00600")
+INFO_StJoseph$shortName <- "Missouri River at St. Joseph, MO"
+
+eList <- mergeReport(INFO_StJoseph, Daily_StJoseph, Sample_StJoseph)
+
+# data plots
+boxConcMonth(eList)
+boxQTwice(eList)
+plotConcTime(eList)
+plotConcQ(eList)
+multiPlotDataOverview(eList)
+
+eList <- modelEstimation(eList)
+
+# C-Q plots
+plotConcTimeDaily(eList)
+plotFluxTimeDaily(eList)
+plotConcPred(eList)
+plotFluxPred(eList)
+plotResidPred(eList)
+plotResidQ(eList)
+plotResidTime(eList)
+boxResidMonth(eList)
+boxConcThree(eList)
+
+plotConcHist(eList)
+plotFluxHist(eList)
+
+tableResults(eList)
+returnDF_StJo <- tableResults(eList)
+
+# Using flow normalized flux but could with this table use a different flux
+tn_fn_summary <- returnDF_Omaha %>% select(Year, "FN Flux [10^6kg/yr]") %>% rename( "Omaha_FN_Flux" = "FN Flux [10^6kg/yr]") %>% full_join(returnDF_StJo %>% select(Year, "FN Flux [10^6kg/yr]") %>% rename( "StJo_FN_Flux" = "FN Flux [10^6kg/yr]"), by = "Year")
+
+# Plot of flux
+tn_fn_summary %>% pivot_longer(cols = c("Omaha_FN_Flux", "StJo_FN_Flux"), names_to = "site", values_to = "flux") %>% ggplot(aes(Year, flux))+geom_line(aes(color = site))
+
+# Average added flux
+tn_added <- tn_fn_summary %>% mutate(added = StJo_FN_Flux - Omaha_FN_Flux) %>% summarize(mean_added = mean(added, na.rm = T)) %>% pull(mean_added)
+tn_added
+```
+
+

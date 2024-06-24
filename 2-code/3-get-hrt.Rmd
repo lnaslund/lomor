@@ -12,38 +12,59 @@ library(mapview)
 library(sf)
 library(arcgis)
 
+borrow <- read_sf("../1-data/1-geospatial/usace_delin_borrow.shp") %>% select(-Shape_Leng, -Shape_Area, -ORIG_FID)
 ```
 
-```{r}
+```{r get nearest nhdflowline qama}
+# split reach buffer in half then run both sides
+lomor_split <- lwgeom::st_split(lomor_10km, lomor) %>% 
+  st_collection_extract(c("POLYGON"))
+
+lomor_split %>% slice(1) %>% mapview()+mapview(borrow)
+
 # query NHD in 10km buffer 
-url <- "https://hydro.nationalmap.gov/arcgis/rest/services/NHDPlus_HR/MapServer/5"
+url <- "https://hydro.nationalmap.gov/arcgis/rest/services/NHDPlus_HR/MapServer/5" 
 
 fl <- arc_open(url)
 
-lomor_nhd <- arc_select(fl, filter_geom = lomor_10km %>% st_as_sfc())
+# problem is it is picking up line segments that touch the boundary but aren't contained by it
+lomor_nhd_left <- arc_select(fl, filter_geom = lomor_split %>% slice(1) %>% st_as_sfc()) %>% st_transform(st_crs(borrow)) # transform to UTM 15N
+lomor_nhd_left <- lomor_nhd_left[st_covered_by(lomor_nhd_left, lomor_split %>% slice(1)) %>% lengths > 0, ] # covered_by isn't a predicate built into arc_select so using here 
 
-# added discharge limit to make sure rivers are not routed to borrow pits
-tribs <- lomor_nhd %>% mutate(reach_nm = if_else(is.na(gnis_name), "", gnis_name)) %>% filter(reach_nm != "Missouri River") %>% filter(qama < 10)
+lomor_nhd_right <- arc_select(fl, filter_geom = lomor_split %>% slice(2) %>% st_as_sfc()) %>% st_transform(st_crs(borrow))
+lomor_nhd_right <- lomor_nhd_right[st_covered_by(lomor_nhd_right, lomor_split %>% slice(2)) %>% lengths > 0, ]
 
-mapview(tribs)
+tribs_left <- lomor_nhd_left %>% 
+  mutate(reach_nm = if_else(is.na(gnis_name), "", gnis_name)) %>% 
+  filter(reach_nm != "Missouri River") %>% # make sure it doesn't select Mo River
+  filter(qama < 10) # added discharge limit to make sure rivers are not routed to borrow pits
 
-nearest_flowlines <- st_nearest_feature(borrow, tribs)
-```
+tribs_right <- lomor_nhd_right %>% 
+  mutate(reach_nm = if_else(is.na(gnis_name), "", gnis_name)) %>% 
+  filter(reach_nm != "Missouri River") %>% # make sure it doesn't select Mo River
+  filter(qama < 10)  # added discharge limit to make sure rivers are not routed to borrow pits
 
+borrow_left <- borrow[st_intersects(borrow, lomor_split %>% slice(1)) %>% lengths > 0, ]
+borrow_right <- borrow[st_intersects(borrow, lomor_split %>% slice(2)) %>% lengths > 0, ]
 
-```{r get discharge of nearest flowline to each borrow pit}
+nearest_flowlines_left <- st_nearest_feature(borrow_left, tribs_left)
+nearest_flowlines_right <- st_nearest_feature(borrow_right, tribs_right)
 
-nearest_flowlines <- st_nearest_feature(borrow, tribs)
+borrow_left$nearest <- nearest_flowlines_left
+borrow_right$nearest <- nearest_flowlines_right
 
-borrow$nearest <- nearest_flowlines
-borrow$nearest_ID <- tribs %>% slice(nearest_flowlines) %>% pull(NHDPlusID)
+borrow_left$nearest_ID <- tribs_left %>% slice(nearest_flowlines_left) %>% pull(nhdplusid)
+borrow_right$nearest_ID <- tribs_right %>% slice(nearest_flowlines_right) %>% pull(nhdplusid)
 
 # QAMA is originally in ft3/s convert to m3/d
 # multiply by m3 in ft3 and s in d
-borrow$nearest_QAMA <- tribs %>% slice(nearest_flowlines) %>% pull(QAMA) * 0.0283168 * 86400
+borrow_left$nearest_QAMA <- tribs_left %>% slice(nearest_flowlines_left) %>% pull(qama) * 0.0283168 * 86400
+borrow_right$nearest_QAMA <- tribs_right %>% slice(nearest_flowlines_right) %>% pull(qama) * 0.0283168 * 86400
 
-borrow$area <- st_area(borrow) 
+borrow_left$area <- st_area(borrow_left) 
+borrow_right$area <- st_area(borrow_right) 
 
-# going to have to figure out how to make sure it selects from the correct side of the river. May create a mask and do it one side at a time or hand edit. Also going to have to filter so that you aren't sending the Nishnabotna river through a tiny borrow pit
-mapview(tribs %>% slice(nearest_flowlines))+mapview(borrow)
+borrow_knit <- borrow_left %>% bind_rows(borrow_right) %>% filter(area %>% as.numeric() > 10)# get rid of tiny polygons which are probably delineation error
+
+mapview(borrow_knit, zcol = "nearest_ID")+mapview(tribs_left %>% slice(nearest_flowlines_left), zcol = "nhdplusid")+mapview(tribs_right %>% slice(nearest_flowlines_right), zcol = "nhdplusid")
 ```

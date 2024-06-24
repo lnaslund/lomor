@@ -1,0 +1,103 @@
+---
+title: "4-get-removal"
+author: "L. Naslund"
+date: "2024-06-24"
+output: html_document
+---
+TN
+
+```{r}
+tn_model <- lm(log(k_d) ~ log(hrt_d), data = k_data)
+
+estimate_tn_pred <- function(res_time){
+  new.dat <- data.frame(hrt_d = res_time)
+  
+  k_mean_log = predict(tn_model, new.dat, interval = "prediction")[1]
+  k_sd_log = (predict(tn_model, new.dat, interval = "prediction")[3] - predict(tn_model, new.dat, interval = "prediction")[1])/2
+  
+  k = exp(rnorm(1, k_mean_log, k_sd_log)) # sample prediction interval
+  
+  R=100-100*exp(-k*res_time)
+  
+  return(R)
+}
+
+n = 10000
+
+## takes a long time to run (>10 min), output as csv for later summaries
+tn_removal_vec <- c() 
+for(i in 1:n){
+  print(i)
+  depth <- runif(n = nrow(borrow_knit), min = 0, max = 1) # sample borrow pit depth between 0 and 1 meters
+  volume <- as.numeric(borrow_knit$area) * depth # volume in m3 
+  hrt <- volume/borrow_knit$nearest_QAMA # Q converted to m3 per day in prior step
+  
+  prop_remov <- map_dbl(hrt, estimate_tn_pred) * 0.01 # % to proportion
+  
+  conc <- sample(tn_data$ConcAve, size = nrow(borrow_knit)) # sample measured TN
+  load <- conc * borrow_knit$nearest_QAMA * 1e3 * 365  * 1e-6 # load in kg / yr
+  
+  remov <- load * prop_remov
+  
+  tot_remov <- sum(remov)
+  
+  tn_removal_vec <- c(tn_removal_vec, tot_remov) # removal is in kg/yr
+}
+
+write.csv(data.frame(vec = tn_removal_vec), "../3-output/tn_removal.csv")
+
+tn_removal_vec <- read.csv("../3-output/tn_removal.csv") %>% pull(vec)
+
+(removal_vec[250]/(44.35 * 10^6)) * 100
+
+print(paste0("removed TN load (kg/yr): ", round(sort(tn_removal_vec)[5000], 2), " (", round(sort(tn_removal_vec)[250], 2), ", ", round(sort(tn_removal_vec)[9750], 2), ")"))
+print(paste0("removed TN load (% added load over reach): ", round((sort(tn_removal_vec)[5000] * 100)/(tn_added * 1e6), 2), " (", round((sort(tn_removal_vec)[250] * 100)/(tn_added * 1e6), 2), ", ", round((sort(tn_removal_vec)[9750] * 100)/(tn_added * 1e6), 2), ")"))
+```
+
+NO3
+
+```{r}
+no3_model <- lm(log(k_d) ~ log(hrt_d), data = cheng_no3)
+
+estimate_no3_pred <- function(res_time){
+  new.dat <- data.frame(hrt_d = res_time)
+  
+  k_mean_log = predict(no3_model, new.dat, interval = "prediction")[1]
+  k_sd_log = (predict(no3_model, new.dat, interval = "prediction")[3] - predict(no3_model, new.dat, interval = "prediction")[1])/2
+  
+  k = exp(rnorm(1, k_mean_log, k_sd_log)) # sample prediction interval
+  
+  R=100-100*exp(-k*res_time)
+  
+  return(R)
+}
+
+n = 10000
+
+## takes a long time to run (>10 min), output as csv for later summaries
+no3_removal_vec <- c() 
+for(i in 1:n){
+  print(i)
+  depth <- runif(n = nrow(borrow_knit), min = 0, max = 1) # sample borrow pit depth between 0 and 1 meters
+  volume <- as.numeric(borrow_knit$area) * depth # volume in m3 
+  hrt <- volume/borrow_knit$nearest_QAMA # Q converted to m3 per day in prior step
+  
+  prop_remov <- map_dbl(hrt, estimate_no3_pred) * 0.01 # % to proportion
+  
+  conc <- sample(nitrate_data$ConcAve, size = nrow(borrow_knit)) # sample measured nitrate
+  load <- conc * borrow_knit$nearest_QAMA * 1e3 * 365  * 1e-6 # load in kg / yr
+  
+  remov <- load * prop_remov
+  
+  tot_remov <- sum(remov)
+  
+  no3_removal_vec <- c(no3_removal_vec, tot_remov) # removal is in kg/yr
+}
+
+write.csv(data.frame(vec = no3_removal_vec), "../3-output/no3_removal.csv")
+
+no3_removal_vec <- read.csv("../3-output/no3_removal.csv") %>% pull(vec)
+
+print(paste0("removed NO3 load (kg/yr): ", round(sort(no3_removal_vec)[5000], 2), " (", round(sort(no3_removal_vec)[250], 2), ", ", round(sort(no3_removal_vec)[9750], 2), ")"))
+print(paste0("removed NO3 load (% added load over reach): ", round((sort(no3_removal_vec)[5000] * 100)/(no3_added * 1e6), 2), " (", round((sort(no3_removal_vec)[250] * 100)/(no3_added * 1e6), 2), ", ", round((sort(no3_removal_vec)[9750] * 100)/(no3_added * 1e6), 2), ")"))
+```
